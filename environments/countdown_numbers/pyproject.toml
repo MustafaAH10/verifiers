@@ -1,0 +1,20 @@
+[project]
+name = "countdown_numbers"
+version = "0.1.0"
+description = "Countdown Numbers mathematical puzzle environment - combine numbers to reach a target"
+tags = ["countdown", "single-turn", "math", "reasoning", "puzzle", "train", "eval"]
+requires-python = ">=3.10"
+dependencies = [
+    "verifiers>=0.1.8",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build]
+include = ["countdown_numbers.py", "pyproject.toml"]
+
+[tool.verifiers.eval]
+num_examples = 20
+rollouts_per_example = 3
