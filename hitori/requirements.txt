@@ -20,5 +20,11 @@ bitsandbytes>=0.45.0
 # Distributed training
 deepspeed>=0.15.0
 
+# Logging and tracking
+wandb>=0.16.0
+
+# HuggingFace Hub (for model download/upload)
+huggingface_hub>=0.20.0
+
 # Progress bars
 tqdm>=4.66.0

@@ -58,6 +58,15 @@ class ScriptArguments:
     max_train_samples: int = -1  # -1 for all
     log_samples_prob: float = 0.1  # Probability of logging samples
 
+    # Wandb logging
+    wandb_project: str = "hitori-grpo"  # Wandb project name
+    wandb_run_name: str = None  # Wandb run name (auto-generated if None)
+    wandb_tags: str = None  # Comma-separated tags for wandb
+
+    # HuggingFace Hub
+    hub_model_id: str = None  # HF Hub model ID for checkpoint upload
+    hub_private: bool = True  # Make hub repo private
+
 
 # =============================================================================
 # Reward Functions
@@ -280,6 +289,53 @@ def grpo_function(
     logger.info(f"Training parameters: {training_args}")
     logger.info(f"Script parameters: {script_args}")
 
+    # =========================================================================
+    # Wandb Setup
+    # =========================================================================
+    if training_args.report_to and "wandb" in training_args.report_to:
+        try:
+            import wandb
+
+            # Set wandb project
+            os.environ["WANDB_PROJECT"] = script_args.wandb_project
+
+            # Generate run name if not provided
+            run_name = script_args.wandb_run_name
+            if run_name is None:
+                run_name = f"hitori-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+
+            # Parse tags
+            tags = ["hitori", "grpo", "puzzle"]
+            if script_args.wandb_tags:
+                tags.extend([t.strip() for t in script_args.wandb_tags.split(",")])
+
+            # Initialize wandb if not already initialized
+            if wandb.run is None:
+                wandb.init(
+                    project=script_args.wandb_project,
+                    name=run_name,
+                    tags=tags,
+                    config={
+                        "model": model_args.model_name_or_path,
+                        "dataset": script_args.dataset_path,
+                        "max_train_samples": script_args.max_train_samples,
+                    },
+                )
+            logger.info(f"Wandb initialized: project={script_args.wandb_project}, run={run_name}")
+
+        except ImportError:
+            logger.warning("wandb not installed. Skipping wandb logging.")
+            training_args.report_to = [r for r in training_args.report_to if r != "wandb"]
+
+    # =========================================================================
+    # HuggingFace Hub Setup
+    # =========================================================================
+    if script_args.hub_model_id:
+        training_args.push_to_hub = True
+        training_args.hub_model_id = script_args.hub_model_id
+        training_args.hub_private_repo = script_args.hub_private
+        logger.info(f"HF Hub upload enabled: {script_args.hub_model_id}")
+
     # Load tokenizer
     tokenizer = AutoTokenizer.from_pretrained(
         script_args.tokenizer_name_or_path
@@ -346,6 +402,16 @@ def grpo_function(
     if training_args.push_to_hub:
         logger.info("Pushing to hub...")
         trainer.push_to_hub()
+
+    # Finish wandb run
+    if training_args.report_to and "wandb" in training_args.report_to:
+        try:
+            import wandb
+            if wandb.run is not None:
+                wandb.finish()
+                logger.info("Wandb run finished")
+        except ImportError:
+            pass
 
     logger.info("*** Training complete! ***")
 

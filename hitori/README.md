@@ -12,6 +12,20 @@ Hitori is a logic puzzle played on a grid of numbers. The goal is to shade certa
 
 ## Quick Start
 
+### 0. Download Base Model (Optional)
+
+Download the model locally for faster loading:
+
+```bash
+# Download Qwen2.5-3B-Instruct to models/qwen2.5-3b-instruct
+python download_model.py
+
+# Or specify a different model/location
+python download_model.py --model Qwen/Qwen2.5-3B-Instruct --output models/qwen2.5-3b-instruct
+```
+
+**Default model location**: `models/qwen2.5-3b-instruct`
+
 ### 1. Generate Dataset
 
 ```bash
@@ -22,23 +36,54 @@ python dataset.py
 python dataset.py --train-examples 5000 --eval-per-difficulty 100 --output-dir data/hitori
 ```
 
-### 2. Train Model
+### 2. Test Single Rollout
+
+Before training, test what the model output looks like:
+
+```bash
+# Test with base model
+python test_rollout.py --model-path Qwen/Qwen2.5-3B-Instruct --difficulty medium
+
+# Test with local model
+python test_rollout.py --model-path models/qwen2.5-3b-instruct --difficulty easy
+
+# Test with 4-bit quantization (lower memory)
+python test_rollout.py --model-path models/qwen2.5-3b-instruct --load-in-4bit
+```
+
+### 3. Train Model
 
 ```bash
 # Single GPU (slow, for testing)
 python train_hitori_grpo.py \
-    --model_name_or_path Qwen/Qwen2.5-3B-Instruct \
+    --model_name_or_path models/qwen2.5-3b-instruct \
     --output_dir outputs/hitori-grpo
+
+# With Wandb logging
+python train_hitori_grpo.py \
+    --model_name_or_path models/qwen2.5-3b-instruct \
+    --output_dir outputs/hitori-grpo \
+    --report_to wandb \
+    --wandb_project hitori-grpo \
+    --wandb_run_name my-experiment
+
+# With HuggingFace Hub checkpoint upload
+python train_hitori_grpo.py \
+    --model_name_or_path models/qwen2.5-3b-instruct \
+    --output_dir outputs/hitori-grpo \
+    --hub_model_id username/hitori-grpo-model \
+    --hub_private true
 
 # Multi-GPU with DeepSpeed
 accelerate launch --num_processes 4 --config_file configs/deepspeed_zero3.yaml \
     train_hitori_grpo.py \
-    --model_name_or_path Qwen/Qwen2.5-3B-Instruct \
+    --model_name_or_path models/qwen2.5-3b-instruct \
     --output_dir outputs/hitori-grpo \
-    --use_vllm true
+    --use_vllm true \
+    --report_to wandb
 ```
 
-### 3. Evaluate
+### 4. Evaluate
 
 ```bash
 python eval_hitori.py \
@@ -56,8 +101,16 @@ hitori/
 ├── dataset.py             # Dataset creation for train/eval splits
 ├── train_hitori_grpo.py   # GRPO training script (TRL-based)
 ├── eval_hitori.py         # Evaluation script
+├── download_model.py      # Model download script
+├── test_rollout.py        # Single rollout testing script
 ├── requirements.txt       # Dependencies
-└── README.md              # This file
+├── README.md              # This file
+├── models/                # Downloaded models (created by download_model.py)
+│   └── qwen2.5-3b-instruct/
+├── data/                  # Generated datasets (created by dataset.py)
+│   └── hitori/
+└── outputs/               # Training outputs
+    └── hitori-grpo/
 ```
 
 ## Puzzle Representation
@@ -284,6 +337,64 @@ The evaluation script reports:
   - Connectivity satisfaction rate
 - **Per-difficulty accuracy**: Breakdown by easy/medium/hard
 
+## Wandb Integration
+
+Training metrics are automatically logged to Weights & Biases when enabled:
+
+```bash
+# Enable wandb logging
+python train_hitori_grpo.py \
+    --model_name_or_path models/qwen2.5-3b-instruct \
+    --output_dir outputs/hitori-grpo \
+    --report_to wandb \
+    --wandb_project hitori-grpo \
+    --wandb_run_name experiment-v1 \
+    --wandb_tags "baseline,medium-difficulty"
+```
+
+**Logged metrics:**
+- Training loss and rewards
+- Format reward rate
+- Solution reward rate
+- Learning rate schedule
+- GPU memory usage
+
+**Environment variables:**
+```bash
+export WANDB_API_KEY=your_api_key
+export WANDB_PROJECT=hitori-grpo  # Optional, can also use --wandb_project
+```
+
+## HuggingFace Hub Integration
+
+Automatically upload checkpoints to HuggingFace Hub:
+
+```bash
+# Upload to HF Hub
+python train_hitori_grpo.py \
+    --model_name_or_path models/qwen2.5-3b-instruct \
+    --output_dir outputs/hitori-grpo \
+    --hub_model_id username/hitori-grpo-model \
+    --hub_private true
+
+# Combined with wandb
+python train_hitori_grpo.py \
+    --model_name_or_path models/qwen2.5-3b-instruct \
+    --output_dir outputs/hitori-grpo \
+    --report_to wandb \
+    --wandb_project hitori-grpo \
+    --hub_model_id username/hitori-grpo-model
+```
+
+**Authentication:**
+```bash
+# Login to HuggingFace
+huggingface-cli login
+
+# Or set token
+export HF_TOKEN=your_token
+```
+
 ## Requirements
 
 - Python 3.10+
@@ -292,6 +403,7 @@ The evaluation script reports:
 - TRL 0.14+
 - vLLM 0.7+ (for fast generation)
 - DeepSpeed 0.15+ (for distributed training)
+- Wandb 0.16+ (for experiment tracking)
 
 Install dependencies:
 
