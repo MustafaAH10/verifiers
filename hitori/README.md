@@ -74,12 +74,11 @@ python train_hitori_grpo.py \
     --hub_model_id username/hitori-grpo-model \
     --hub_private true
 
-# Multi-GPU with DeepSpeed
-accelerate launch --num_processes 4 --config_file configs/deepspeed_zero3.yaml \
+# Multi-GPU with DeepSpeed + vLLM (4xA100)
+# Note: num_processes=3 because last GPU is reserved for vLLM
+accelerate launch --num_processes 3 --config_file configs/deepspeed_zero3.yaml \
     train_hitori_grpo.py \
-    --model_name_or_path models/qwen2.5-3b-instruct \
-    --output_dir outputs/hitori-grpo \
-    --use_vllm true \
+    --config configs/hitori_grpo.yaml \
     --report_to wandb
 ```
 
@@ -305,27 +304,37 @@ class HitoriSolver:
 
 ## Training Configuration
 
-Recommended hyperparameters (based on mini-deepseek-r1-aha-grpo):
+Recommended hyperparameters (aligned with [mini-deepseek-r1-aha-grpo](https://github.com/philschmid/deep-learning-pytorch-huggingface) and `run_r1_grpo.py`):
 
 ```yaml
 # Model
-model_name_or_path: Qwen/Qwen2.5-3B-Instruct
+model_name_or_path: models/qwen2.5-3b-instruct
+torch_dtype: bfloat16
+attn_implementation: flash_attention_2
 
-# GRPO
+# GRPO specific (from DeepSeekMath paper)
 learning_rate: 5e-7
-beta: 0.001  # KL coefficient
-num_generations: 8  # Samples per prompt
-max_completion_length: 1024
+lr_scheduler_type: cosine
+beta: 0.001                  # KL coefficient
+num_generations: 8           # Samples per prompt (8 for distributed training)
+max_prompt_length: 256       # Max input tokens
+max_completion_length: 1024  # Max output tokens
 
 # Training
 num_train_epochs: 3
 per_device_train_batch_size: 1
-gradient_accumulation_steps: 8
+gradient_accumulation_steps: 1
+gradient_checkpointing: true
+gradient_checkpointing_kwargs: {use_reentrant: false}
 
-# Generation
-temperature: 0.7
-top_p: 0.9
+# vLLM (for fast generation)
+use_vllm: true
+vllm_device: cuda:3          # Last GPU (0-indexed)
 ```
+
+**Important**: When using vLLM with DeepSpeed, reserve the last GPU for vLLM generation:
+- 4 GPUs: `num_processes=3`, `vllm_device=cuda:3`
+- 8 GPUs: `num_processes=7`, `vllm_device=cuda:7`
 
 ## Evaluation Metrics
 

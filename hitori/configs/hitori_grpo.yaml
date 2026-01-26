@@ -1,0 +1,72 @@
+# Hitori GRPO Training Configuration
+# Optimized for 4xA100 80GB
+# Aligned with mini-deepseek-r1-aha-grpo.ipynb and run_r1_grpo.py
+
+# =============================================================================
+# Model Configuration
+# =============================================================================
+model_name_or_path: models/qwen2.5-3b-instruct
+model_revision: main
+trust_remote_code: true
+torch_dtype: bfloat16
+attn_implementation: flash_attention_2
+
+# LoRA Configuration (optional, comment out for full fine-tuning)
+# use_peft: true
+# lora_r: 64
+# lora_alpha: 128
+# lora_dropout: 0.05
+# lora_target_modules: ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+
+# =============================================================================
+# GRPO Configuration (from mini-deepseek-r1-aha-grpo)
+# =============================================================================
+# Learning rate and optimization
+learning_rate: 5.0e-7
+lr_scheduler_type: cosine
+warmup_ratio: 0.1
+
+# GRPO specific
+beta: 0.001                    # KL penalty coefficient
+num_generations: 8             # Number of completions per prompt (8 for distributed)
+max_prompt_length: 256         # Max tokens for input prompt
+max_completion_length: 1024    # Max tokens to generate
+
+# =============================================================================
+# Training Configuration
+# =============================================================================
+output_dir: outputs/hitori-grpo
+num_train_epochs: 3
+per_device_train_batch_size: 1
+per_device_eval_batch_size: 1
+gradient_accumulation_steps: 1
+gradient_checkpointing: true
+gradient_checkpointing_kwargs:
+  use_reentrant: false
+eval_strategy: steps
+eval_steps: 500
+save_strategy: steps
+save_steps: 500
+save_total_limit: 3
+logging_steps: 10
+seed: 42
+
+# =============================================================================
+# vLLM Configuration (for fast generation)
+# =============================================================================
+use_vllm: true
+vllm_device: cuda:3            # Last GPU for vLLM (0-indexed, so GPU 4 = index 3)
+vllm_gpu_memory_utilization: 0.7
+
+# =============================================================================
+# Logging and Checkpointing
+# =============================================================================
+report_to: wandb
+logging_first_step: true
+bf16: true
+
+# =============================================================================
+# Script Arguments
+# =============================================================================
+dataset_path: data/hitoridata
+wandb_project: hitori-grpo
