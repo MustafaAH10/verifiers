@@ -32,15 +32,19 @@ class HitoriPuzzle:
     difficulty: str
 
     def format_grid(self) -> str:
-        """Format grid for display with column headers."""
+        """Format grid for display with column headers and clear separators."""
         lines = []
-        # Header row
-        header = "  " + " ".join(COLUMNS[:GRID_SIZE])
+        # Header row with columns
+        header = "     " + "  ".join(COLUMNS[:GRID_SIZE])
         lines.append(header)
-        # Data rows
+        # Separator line
+        lines.append("   +" + "-" * (GRID_SIZE * 3 - 1) + "+")
+        # Data rows with pipe separators
         for i, row in enumerate(self.grid):
-            row_str = f"{i+1} " + " ".join(str(x) for x in row)
+            row_str = f"R{i+1} | " + "  ".join(str(x) for x in row) + " |"
             lines.append(row_str)
+        # Bottom separator
+        lines.append("   +" + "-" * (GRID_SIZE * 3 - 1) + "+")
         return "\n".join(lines)
 
     def format_solution(self) -> str:
@@ -55,18 +59,18 @@ class HitoriPuzzle:
 DIFFICULTY_CONFIG = {
     "easy": {
         "min_shaded": 4,
-        "max_shaded": 6,
+        "max_shaded": 5,
         "description": "Few cells to shade, obvious deductions"
     },
     "medium": {
         "min_shaded": 6,
-        "max_shaded": 9,
-        "description": "Moderate complexity, some reasoning required"
+        "max_shaded": 6,  # Fixed at exactly 6 for consistent training
+        "description": "Exactly 6 cells to shade"
     },
     "hard": {
-        "min_shaded": 11,
-        "max_shaded": 14,
-        "description": "Many cells to shade, complex constraints"
+        "min_shaded": 7,
+        "max_shaded": 9,
+        "description": "More cells to shade, complex constraints"
     }
 }
 
@@ -349,27 +353,83 @@ def format_r1_prompt(puzzle: HitoriPuzzle, tokenizer=None) -> str:
     Returns:
         Formatted prompt string
     """
-    system_content = "You are a puzzle solver. You think carefully about the problem step by step in your mind before providing the answer."
+    system_content = """You are an expert logic puzzle solver specializing in Hitori puzzles. You approach each puzzle methodically, checking all constraints carefully before finalizing your answer. You think step by step, showing your reasoning process clearly."""
 
     user_content = f"""Solve this 6x6 Hitori puzzle:
 
 {puzzle.format_grid()}
 
-Rules:
-1. UNIQUENESS: Each number must appear only once per row and column (among unshaded/white cells)
-2. NON-ADJACENCY: No two shaded/black cells may be adjacent horizontally or vertically
-3. CONNECTIVITY: All unshaded/white cells must form a single connected region
+## Rules of Hitori
 
-Instructions:
-- Think through the problem inside <think> </think> tags
-- After </think>, provide your FINAL answer with ALL cells to shade in a SINGLE <answer> </answer> tag
-- Do NOT use multiple answer tags - only ONE at the very end with the complete solution
+You must shade (blacken) exactly 6 cells in the grid while satisfying ALL THREE rules:
 
-Example format:
-<think>reasoning here...</think>
-<answer>A1, B3, C5, F2</answer>"""
+### Rule 1: UNIQUENESS
+After shading, each number must appear EXACTLY ONCE per row and EXACTLY ONCE per column among the remaining unshaded (white) cells.
+- E.g. If a row has two 3s, at least one must be shaded
+- E.g. If a column has three 5s, at least two must be shaded
 
-    assistant_prefix = "Let me solve this step by step.\n<think>"
+### Rule 2: NON-ADJACENCY
+No two shaded cells may touch each other horizontally or vertically (diagonal is OK).
+- E.g. If you shade A1, you CANNOT shade A2 or B1
+- Shaded cells must be isolated from each other orthogonally
+
+### Rule 3: CONNECTIVITY
+All unshaded (white) cells must form a single connected region.
+- You must be able to travel from any unshaded cell to any other unshaded cell
+- Movement is only horizontal or vertical (not diagonal)
+- Shading cannot split the white cells into separate islands
+
+## Coordinate System
+- Columns are labeled A-F (left to right)
+- Rows are labeled R1-R6 (top to bottom), but use just the number in coordinates
+- Example: A1 = column A, row R1 (top-left), F6 = column F, row R6 (bottom-right)
+
+## Worked Example
+
+For this 4x4 puzzle:
+     A  B  C  D
+   +-----------+
+R1 | 2  1  2  3 |
+R2 | 1  2  3  2 |
+R3 | 3  3  1  4 |
+R4 | 4  4  2  1 |
+   +-----------+
+
+<think>
+Let me identify the duplicates first:
+- Row R1: two 2s at A1 and C1 - one must be shaded
+- Row R2: two 2s at B2 and D2 - one must be shaded
+- Row R3: two 3s at A3 and B3 - one must be shaded
+- Row R4: two 4s at A4 and B4 - one must be shaded
+- Column C: two 2s at C1 and C4
+
+Working through the logic:
+- If I shade A1 (value 2), then C1 stays unshaded
+- For Row R3: if I shade B3, then A3 stays
+- For Row R4: if I shade A4, then B4 stays (and A4 is not adjacent to B3)
+- For Row R2: if I shade D2, then B2 stays
+
+Checking solution A1, D2, B3, A4:
+- Adjacency: A1↔D2 (not adjacent ✓), A1↔B3 (not adjacent ✓), A1↔A4 (not adjacent, A2/A3 between ✓)
+- D2↔B3 (not adjacent ✓), D2↔A4 (not adjacent ✓), B3↔A4 (not adjacent ✓)
+- Connectivity: all unshaded cells form one connected region ✓
+- Uniqueness: no duplicates in any row or column ✓
+</think>
+<answer>A1, D2, B3, A4</answer>
+
+## Your Task
+
+Solve the 6x6 puzzle above. You must find exactly 6 cells to shade.
+
+Show your complete reasoning inside <think> </think> tags, then provide your final answer.
+
+IMPORTANT:
+- You must shade EXACTLY 6 cells
+- Use format: <answer>A1, B3, C5, D2, E4, F6</answer> (comma-separated coordinates)
+- Only provide ONE <answer> tag at the very end with your complete solution
+- Double-check all three rules before submitting"""
+
+    assistant_prefix = "I'll solve this Hitori puzzle step by step, finding exactly 6 cells to shade.\n<think>"
 
     if tokenizer is not None:
         messages = [

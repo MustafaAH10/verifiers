@@ -47,6 +47,125 @@ logger.addHandler(handler)
 
 
 # =============================================================================
+# Rollout Logger - Systematic logging of puzzles, completions, and rewards
+# =============================================================================
+
+class RolloutLogger:
+    """Logs rollouts systematically with puzzles, completions, and rewards."""
+
+    def __init__(self, log_dir: str = "rollout_logs", samples_per_file: int = 100):
+        self.log_dir = log_dir
+        self.samples_per_file = samples_per_file
+        self.current_samples = []
+        self.file_counter = 0
+        self.total_logged = 0
+        os.makedirs(log_dir, exist_ok=True)
+
+    def log_rollout(
+        self,
+        puzzle_grid: List[List[int]],
+        completion: str,
+        format_reward: float,
+        solution_reward: float,
+        expected_solution: str,
+        proposed_solution: str = None,
+        verification_details: dict = None
+    ):
+        """Log a single rollout with all relevant information."""
+        # Format the grid nicely
+        grid_str = self._format_grid(puzzle_grid)
+
+        sample = {
+            "index": self.total_logged,
+            "grid": grid_str,
+            "completion": completion,
+            "format_reward": format_reward,
+            "solution_reward": solution_reward,
+            "total_reward": format_reward + solution_reward,
+            "expected_solution": expected_solution,
+            "proposed_solution": proposed_solution or "N/A",
+            "verification": verification_details or {}
+        }
+
+        self.current_samples.append(sample)
+        self.total_logged += 1
+
+        # Write to file when we have enough samples
+        if len(self.current_samples) >= self.samples_per_file:
+            self._flush_to_file()
+
+    def _format_grid(self, grid: List[List[int]]) -> str:
+        """Format grid for display."""
+        if not grid:
+            return "N/A"
+        columns = "ABCDEF"
+        lines = []
+        lines.append("     " + "  ".join(columns[:len(grid)]))
+        lines.append("   +" + "-" * (len(grid) * 3 - 1) + "+")
+        for i, row in enumerate(grid):
+            row_str = f"R{i+1} | " + "  ".join(str(x) for x in row) + " |"
+            lines.append(row_str)
+        lines.append("   +" + "-" * (len(grid) * 3 - 1) + "+")
+        return "\n".join(lines)
+
+    def _flush_to_file(self):
+        """Write current samples to a file."""
+        if not self.current_samples:
+            return
+
+        filename = os.path.join(
+            self.log_dir,
+            f"rollouts_{self.file_counter:04d}.txt"
+        )
+
+        with open(filename, "w") as f:
+            f.write(f"# Rollout Log File {self.file_counter}\n")
+            f.write(f"# Samples: {len(self.current_samples)}\n")
+            f.write(f"# Generated: {datetime.now().isoformat()}\n")
+            f.write("=" * 80 + "\n\n")
+
+            for sample in self.current_samples:
+                f.write(f"{'='*80}\n")
+                f.write(f"ROLLOUT #{sample['index']}\n")
+                f.write(f"{'='*80}\n\n")
+
+                f.write("PUZZLE:\n")
+                f.write(sample['grid'] + "\n\n")
+
+                f.write(f"EXPECTED SOLUTION: {sample['expected_solution']}\n")
+                f.write(f"PROPOSED SOLUTION: {sample['proposed_solution']}\n\n")
+
+                f.write(f"REWARDS:\n")
+                f.write(f"  Format:   {sample['format_reward']:.1f}\n")
+                f.write(f"  Solution: {sample['solution_reward']:.1f}\n")
+                f.write(f"  Total:    {sample['total_reward']:.1f}\n\n")
+
+                if sample['verification']:
+                    f.write(f"VERIFICATION DETAILS:\n")
+                    for k, v in sample['verification'].items():
+                        f.write(f"  {k}: {v}\n")
+                    f.write("\n")
+
+                f.write("MODEL COMPLETION:\n")
+                f.write("-" * 40 + "\n")
+                f.write(sample['completion'] + "\n")
+                f.write("-" * 40 + "\n\n")
+
+        logger.info(f"Wrote {len(self.current_samples)} rollouts to {filename}")
+        self.current_samples = []
+        self.file_counter += 1
+
+    def flush(self):
+        """Force flush remaining samples to file."""
+        if self.current_samples:
+            self._flush_to_file()
+
+
+# Global rollout logger instance
+rollout_logger = RolloutLogger(log_dir="rollout_logs", samples_per_file=100)
+
+
+# =============================================================================
 # Script Arguments
 # =============================================================================
 
@@ -63,14 +182,15 @@ class ScriptArguments:
     wandb_run_name: str = None  # Wandb run name (auto-generated if None)
     wandb_tags: str = None  # Comma-separated tags for wandb
 
-    # HuggingFace Hub
-    hub_model_id: str = None  # HF Hub model ID for checkpoint upload
-    hub_private: bool = True  # Make hub repo private
-
 
 # =============================================================================
-# Reward Functions
+# Reward Functions with Systematic Logging
 # =============================================================================
+
+# Cache for format rewards to coordinate logging between reward functions
+_format_reward_cache = {}
+_log_sample_rate = 0.50  # Log 50% of samples
+
 
 def format_reward_func(completions: List[str], target: List[str], **kwargs) -> List[float]:
     """
@@ -87,34 +207,28 @@ def format_reward_func(completions: List[str], target: List[str], **kwargs) -> L
     Returns:
         List of reward scores (0.0 or 1.0)
     """
+    global _format_reward_cache
     rewards = []
 
     for completion in completions:
         try:
             # Add synthetic <think> as it's already part of the prompt
-            completion = "<think>" + completion
-
-            # Log some samples for debugging
-            if random.random() < 0.1:
-                os.makedirs("completion_samples", exist_ok=True)
-                log_file = os.path.join("completion_samples", "hitori_completion_samples.txt")
-                with open(log_file, "a") as f:
-                    f.write(f"\n\n{'='*60}\n")
-                    f.write(completion)
+            full_completion = "<think>" + completion
 
             # Check format: must have </think> followed eventually by <answer>...</answer>
-            # We require the completion to close the think tag and have at least one answer tag
-            has_think_close = "</think>" in completion
-            has_answer = re.search(r"<answer>[\s\S]*?</answer>", completion) is not None
+            has_think_close = "</think>" in full_completion
+            has_answer = re.search(r"<answer>[\s\S]*?</answer>", full_completion) is not None
 
-            if has_think_close and has_answer:
-                rewards.append(1.0)
-            else:
-                rewards.append(0.0)
+            reward = 1.0 if (has_think_close and has_answer) else 0.0
+            rewards.append(reward)
+
+            # Cache for later use by solution_reward_func
+            _format_reward_cache[id(completion)] = reward
 
         except Exception as e:
             logger.debug(f"Format reward error: {e}")
             rewards.append(0.0)
+            _format_reward_cache[id(completion)] = 0.0
 
     return rewards
 
@@ -127,7 +241,7 @@ def solution_reward_func(
     **kwargs
 ) -> List[float]:
     """
-    Reward function for solution correctness.
+    Reward function for solution correctness with systematic logging.
 
     Checks if the proposed solution satisfies all Hitori constraints:
     1. Uniqueness: each number appears once per row/column (unshaded)
@@ -143,6 +257,7 @@ def solution_reward_func(
     Returns:
         List of reward scores (0.0 or 1.0)
     """
+    global _format_reward_cache, rollout_logger
     rewards = []
 
     for completion, gt_target, puzzle_grid, expected_solution in zip(
@@ -150,42 +265,54 @@ def solution_reward_func(
     ):
         try:
             # Add synthetic <think> prefix
-            completion = "<think>" + completion
+            full_completion = "<think>" + completion
+
+            # Get format reward from cache
+            format_reward = _format_reward_cache.pop(id(completion), 0.0)
 
             # Extract the LAST <answer> tag (final answer only)
-            matches = re.findall(r"<answer>(.*?)<\/answer>", completion, re.DOTALL)
-            if not matches:
-                rewards.append(0.0)
-                continue
+            matches = re.findall(r"<answer>(.*?)<\/answer>", full_completion, re.DOTALL)
 
-            # Use the last answer (the final one)
-            answer_text = matches[-1].strip()
+            proposed_solution_str = "No answer tag found"
+            verification_details = {}
+            solution_reward = 0.0
 
-            # Parse coordinates from the answer
-            proposed_shaded = parse_coordinates(answer_text)
+            if matches:
+                # Use the last answer (the final one)
+                answer_text = matches[-1].strip()
 
-            if not proposed_shaded:
-                rewards.append(0.0)
-                continue
+                # Parse coordinates from the answer
+                proposed_shaded = parse_coordinates(answer_text)
 
-            # Verify the solution
-            is_valid, details = verify_solution(puzzle_grid, proposed_shaded)
+                if proposed_shaded:
+                    proposed_solution_str = format_solution(proposed_shaded)
 
-            if is_valid:
-                rewards.append(1.0)
+                    # Verify the solution
+                    is_valid, details = verify_solution(puzzle_grid, proposed_shaded)
+                    verification_details = details
 
-                # Log successful solutions
-                if random.random() < 0.1:
-                    os.makedirs("completion_samples", exist_ok=True)
-                    log_file = os.path.join("completion_samples", "hitori_success_samples.txt")
-                    with open(log_file, "a") as f:
-                        f.write(f"\n\n{'='*60}\n")
-                        f.write(f"Grid: {puzzle_grid}\n")
-                        f.write(f"Proposed: {format_solution(proposed_shaded)}\n")
-                        f.write(f"Expected: {gt_target}\n")
-                        f.write(f"Completion:\n{completion}\n")
-            else:
-                rewards.append(0.0)
+                    if is_valid:
+                        solution_reward = 1.0
+                else:
+                    proposed_solution_str = f"Could not parse: {answer_text[:50]}..."
+                    verification_details = {"error": "Failed to parse coordinates"}
+
+            rewards.append(solution_reward)
+
+            # Log rollout with probability
+            if random.random() < _log_sample_rate:
+                try:
+                    rollout_logger.log_rollout(
+                        puzzle_grid=puzzle_grid,
+                        completion=full_completion,
+                        format_reward=format_reward,
+                        solution_reward=solution_reward,
+                        expected_solution=gt_target,
+                        proposed_solution=proposed_solution_str,
+                        verification_details=verification_details
+                    )
+                except Exception as log_error:
+                    logger.debug(f"Rollout logging error: {log_error}")
 
         except Exception as e:
             logger.debug(f"Solution reward error: {e}")
@@ -327,15 +454,6 @@ def grpo_function(
             logger.warning("wandb not installed. Skipping wandb logging.")
             training_args.report_to = [r for r in training_args.report_to if r != "wandb"]
 
-    # =========================================================================
-    # HuggingFace Hub Setup
-    # =========================================================================
-    if script_args.hub_model_id:
-        training_args.push_to_hub = True
-        training_args.hub_model_id = script_args.hub_model_id
-        training_args.hub_private_repo = script_args.hub_private
-        logger.info(f"HF Hub upload enabled: {script_args.hub_model_id}")
-
     # Load tokenizer
     tokenizer = AutoTokenizer.from_pretrained(
         script_args.tokenizer_name_or_path
@@ -398,11 +516,6 @@ def grpo_function(
     if trainer.accelerator.is_main_process:
         trainer.create_model_card({"tags": ["rl", "grpo", "hitori", "puzzle"]})
 
-    # Push to hub if requested
-    if training_args.push_to_hub:
-        logger.info("Pushing to hub...")
-        trainer.push_to_hub()
-
     # Finish wandb run
     if training_args.report_to and "wandb" in training_args.report_to:
         try:
@@ -412,6 +525,10 @@ def grpo_function(
                 logger.info("Wandb run finished")
         except ImportError:
             pass
+
+    # Flush any remaining rollout logs
+    rollout_logger.flush()
+    logger.info(f"Total rollouts logged: {rollout_logger.total_logged}")
 
     logger.info("*** Training complete! ***")
 
