@@ -53,7 +53,7 @@ logger.addHandler(handler)
 @dataclass
 class ScriptArguments:
     """Arguments specific to Hitori training."""
-    dataset_path: str = "data/hitori"  # Path to generated dataset
+    dataset_path: str = "data/hitoridata"  # Path to generated dataset
     tokenizer_name_or_path: str = None
     max_train_samples: int = -1  # -1 for all
     log_samples_prob: float = 0.1  # Probability of logging samples
@@ -102,16 +102,15 @@ def format_reward_func(completions: List[str], target: List[str], **kwargs) -> L
                     f.write(f"\n\n{'='*60}\n")
                     f.write(completion)
 
-            # Check format: <think>...</think>\n<answer>...</answer>
-            # Allow for flexible whitespace and content
-            regex = r"^<think>([^<]*(?:<(?!/?think>)[^<]*)*)<\/think>\s*<answer>([\s\S]*?)<\/answer>"
+            # Check format: must have </think> followed eventually by <answer>...</answer>
+            # We require the completion to close the think tag and have at least one answer tag
+            has_think_close = "</think>" in completion
+            has_answer = re.search(r"<answer>[\s\S]*?</answer>", completion) is not None
 
-            match = re.search(regex, completion, re.DOTALL)
-
-            if match is None or len(match.groups()) != 2:
-                rewards.append(0.0)
-            else:
+            if has_think_close and has_answer:
                 rewards.append(1.0)
+            else:
+                rewards.append(0.0)
 
         except Exception as e:
             logger.debug(f"Format reward error: {e}")
@@ -153,13 +152,14 @@ def solution_reward_func(
             # Add synthetic <think> prefix
             completion = "<think>" + completion
 
-            # Extract answer from tags
-            match = re.search(r"<answer>(.*?)<\/answer>", completion, re.DOTALL)
-            if match is None:
+            # Extract the LAST <answer> tag (final answer only)
+            matches = re.findall(r"<answer>(.*?)<\/answer>", completion, re.DOTALL)
+            if not matches:
                 rewards.append(0.0)
                 continue
 
-            answer_text = match.group(1).strip()
+            # Use the last answer (the final one)
+            answer_text = matches[-1].strip()
 
             # Parse coordinates from the answer
             proposed_shaded = parse_coordinates(answer_text)

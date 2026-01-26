@@ -59,8 +59,8 @@ DIFFICULTY_CONFIG = {
         "description": "Few cells to shade, obvious deductions"
     },
     "medium": {
-        "min_shaded": 7,
-        "max_shaded": 10,
+        "min_shaded": 6,
+        "max_shaded": 9,
         "description": "Moderate complexity, some reasoning required"
     },
     "hard": {
@@ -288,7 +288,7 @@ def generate_puzzles(
     puzzles = []
 
     if difficulty == "mixed":
-        distribution = {"easy": 0.3, "medium": 0.5, "hard": 0.2}
+        distribution = {"medium": 1.0}  # Training uses only medium difficulty
     else:
         distribution = {difficulty: 1.0}
 
@@ -360,14 +360,14 @@ Rules:
 2. NON-ADJACENCY: No two shaded/black cells may be adjacent horizontally or vertically
 3. CONNECTIVITY: All unshaded/white cells must form a single connected region
 
-Think step-by-step about which cells must be shaded. Consider:
-- Which numbers appear multiple times in rows/columns (at least one copy must be shaded)
-- Which cells cannot be shaded without disconnecting white cells
-- Which cells cannot be shaded without creating adjacent black cells
+Instructions:
+- Think through the problem inside <think> </think> tags
+- After </think>, provide your FINAL answer with ALL cells to shade in a SINGLE <answer> </answer> tag
+- Do NOT use multiple answer tags - only ONE at the very end with the complete solution
 
-Show your reasoning in <think> </think> tags.
-Return the cells to shade in <answer> </answer> tags using coordinate notation.
-Example: <answer>A1, B3, C5, F2</answer>"""
+Example format:
+<think>reasoning here...</think>
+<answer>A1, B3, C5, F2</answer>"""
 
     assistant_prefix = "Let me solve this step by step.\n<think>"
 

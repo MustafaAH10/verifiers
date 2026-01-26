@@ -352,7 +352,7 @@ def main():
     parser = argparse.ArgumentParser(description="Evaluate Hitori puzzle solver")
     parser.add_argument("--model-path", type=str, required=True,
                         help="Path to trained model")
-    parser.add_argument("--eval-data", type=str, default="data/hitori",
+    parser.add_argument("--eval-data", type=str, default="data/hitoridata",
                         help="Path to evaluation dataset")
     parser.add_argument("--output-dir", type=str, default="eval_results",
                         help="Output directory for results")

@@ -182,7 +182,7 @@ def create_full_dataset(
 
 def save_dataset(
     dataset: DatasetDict,
-    output_dir: str = "data/hitori",
+    output_dir: str = "data/hitoridata",
     save_to_hub: bool = False,
     hub_repo: Optional[str] = None,
     verbose: bool = True
@@ -222,7 +222,7 @@ def save_dataset(
         dataset.push_to_hub(hub_repo)
 
 
-def load_dataset_from_disk(data_dir: str = "data/hitori") -> DatasetDict:
+def load_dataset_from_disk(data_dir: str = "data/hitoridata") -> DatasetDict:
     """
     Load dataset from disk.
 
@@ -248,7 +248,7 @@ if __name__ == "__main__":
                         help="Number of training examples")
     parser.add_argument("--eval-per-difficulty", type=int, default=200,
                         help="Number of eval examples per difficulty")
-    parser.add_argument("--output-dir", type=str, default="data/hitori",
+    parser.add_argument("--output-dir", type=str, default="data/hitoridata",
                         help="Output directory")
     parser.add_argument("--train-seed", type=int, default=42,
                         help="Random seed for training data")

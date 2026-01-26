@@ -33,7 +33,7 @@ python download_model.py --model Qwen/Qwen2.5-3B-Instruct --output models/qwen2.
 python dataset.py
 
 # Custom generation
-python dataset.py --train-examples 5000 --eval-per-difficulty 100 --output-dir data/hitori
+python dataset.py --train-examples 5000 --eval-per-difficulty 100 --output-dir data/hitoridata
 ```
 
 ### 2. Test Single Rollout
@@ -88,7 +88,7 @@ accelerate launch --num_processes 4 --config_file configs/deepspeed_zero3.yaml \
 ```bash
 python eval_hitori.py \
     --model-path outputs/hitori-grpo \
-    --eval-data data/hitori \
+    --eval-data data/hitoridata \
     --output-dir eval_results
 ```
 
@@ -108,7 +108,7 @@ hitori/
 ├── models/                # Downloaded models (created by download_model.py)
 │   └── qwen2.5-3b-instruct/
 ├── data/                  # Generated datasets (created by dataset.py)
-│   └── hitori/
+│   └── hitoridata/
 └── outputs/               # Training outputs
     └── hitori-grpo/
 ```
@@ -197,6 +197,8 @@ def solution_reward_func(completions, target, grid, solution, **kwargs):
             - Non-adjacency: no two shaded cells are adjacent
             - Connectivity: all unshaded cells form connected region
         0.0 if ANY constraint is violated or answer cannot be parsed
+
+    Extracts the LAST <answer> tag (final answer only).
     """
 ```
 
@@ -233,12 +235,12 @@ The model must achieve both format correctness AND solution correctness to recei
 | Level | Shaded Cells | Description |
 |-------|--------------|-------------|
 | Easy | 4-6 | Few cells to shade, obvious deductions |
-| Medium | 7-10 | Moderate complexity, some reasoning required |
+| Medium | 6-9 | Moderate complexity, some reasoning required |
 | Hard | 11-14 | Many cells to shade, complex constraints |
 
 ### Training Distribution
 
-- **Training set**: 30% easy, 50% medium, 20% hard (10,000 total)
+- **Training set**: 100% medium difficulty (10,000 total)
 - **Evaluation sets**: 200 puzzles each for easy, medium, hard, and mixed
 
 ## Generation Algorithm
