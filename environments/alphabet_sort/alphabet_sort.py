@@ -1,5 +1,6 @@
 import difflib
 import json
+import logging
 import random
 import re
 from typing import List
@@ -7,6 +8,8 @@ from typing import List
 from datasets import Dataset, load_dataset
 
 import verifiers as vf
+
+logger = logging.getLogger(__name__)
 
 
 def _extract_first_name(combined_name: str) -> str:
@@ -41,7 +44,7 @@ def get_dataset_builder(
     dataset_name: str = "kalomaze/alphabetic-arxiv-authors-it1",
     dataset_split: str = "train",
     seed: int = 1337420,
-) -> vf.DatasetBuilder:
+):
     """Returns a DatasetBuilder that lazily builds the alphabet sorting dataset."""
 
     def build() -> Dataset:
@@ -174,12 +177,8 @@ These are in addition to the prior list. Mark any NEW names (that weren't in the
                 )
 
             except Exception as e:
-                print(f"Error line {line_num}: {e}")
+                logger.error(f"Error line {line_num}: {e}")
 
-        print(
-            f"Dataset: {len(data)} examples with {min_turns}-{max_turns} turns, "
-            f"{min_names_per_turn}-{max_names_per_turn} names per turn"
-        )
         return Dataset.from_list(data)
 
     return build
@@ -347,5 +346,5 @@ def load_environment(
         dataset_split=dataset_split,
         seed=seed,
     )
-
-    return SortingEnv(dataset=dataset_builder, rubric=rubric, max_turns=max_turns)
+    dataset = dataset_builder()
+    return SortingEnv(dataset=dataset, rubric=rubric, max_turns=max_turns)
