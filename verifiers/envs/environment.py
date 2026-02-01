@@ -27,6 +27,8 @@ from typing import (
 from datasets import Dataset
 from openai import AsyncOpenAI, BadRequestError, OpenAI
 from openai.types.chat import ChatCompletion
+from openai.types.chat.chat_completion import Choice
+from openai.types.completion_choice import CompletionChoice
 
 import verifiers as vf
 from verifiers.parsers.parser import Parser
@@ -37,15 +39,18 @@ from verifiers.types import (
     DatasetBuilder,
     GenerateMetadata,
     GenerateOutputs,
+    LogCallback,
     Messages,
     MessageType,
     ModelResponse,
+    ProgressCallback,
     RolloutInput,
     RolloutTiming,
     SamplingArgs,
+    StartCallback,
     State,
 )
-from verifiers.utils.async_utils import maybe_semaphore
+from verifiers.utils.async_utils import maybe_retry, maybe_semaphore
 from verifiers.utils.error_utils import ErrorChain
 from verifiers.utils.eval_utils import make_dataset, save_rollout_results
 from verifiers.utils.message_utils import (
@@ -606,13 +611,25 @@ class Environment(ABC):
 
         # Some providers (e.g. OpenRouter) may return None for response or response.choices
         if response is None:
-            raise vf.EmptyModelResponseError from ValueError(
-                "Model returned no response"
-            )
+            raise vf.EmptyModelResponseError("Model returned no response")
         if response.choices is None:
-            raise vf.EmptyModelResponseError from ValueError(
-                "Model returned no response choices"
+            raise vf.EmptyModelResponseError("Model returned no response choices")
+        if not len(response.choices) == 1:
+            raise vf.InvalidModelResponseError(
+                f"Model returned {len(response.choices)} choices, expected 1"
             )
+        if isinstance(response.choices[0], Choice):
+            if not (
+                response.choices[0].message.content
+                or response.choices[0].message.tool_calls
+            ):
+                raise vf.EmptyModelResponseError(
+                    "Model returned no content and did not call any tools"
+                )
+        elif isinstance(response.choices[0], CompletionChoice):
+            if not response.choices[0].text:
+                raise vf.EmptyModelResponseError("Model returned no content")
+
         return response
 
     @final
@@ -816,6 +833,20 @@ class Environment(ABC):
             len(all_states) // num_unique_examples if num_unique_examples > 0 else 1
         )
 
+        def _tools_key(tools: list | None) -> str:
+            if not tools:
+                return ""
+            return str(sorted([t.get("function", {}).get("name", "") for t in tools]))
+
+        all_tools = [state.get("oai_tools") for state in all_states]
+        unique_tool_sets = set(_tools_key(t) for t in all_tools)
+        tools_vary = len(unique_tool_sets) > 1
+
+        if tools_vary:
+            metadata_tools = None
+        else:
+            metadata_tools = next((t for t in all_tools if t), self.oai_tools)
+
         metadata = GenerateMetadata(
             env_id=self.env_id,
             env_args=self.env_args,
@@ -833,6 +864,7 @@ class Environment(ABC):
             },
             state_columns=state_columns or [],
             path_to_save=path_to_save,
+            tools=metadata_tools,
         )
 
         return GenerateOutputs(
@@ -863,8 +895,14 @@ class Environment(ABC):
         state_columns: list[str] | None = None,
         save_results: bool = False,
         save_every: int = -1,
+        push_to_hf_hub: bool = False,
+        hf_hub_dataset_name: str | None = None,
         use_tqdm: bool = True,
         independent_scoring: bool = False,
+        max_retries: int = 0,
+        on_start: StartCallback | None = None,
+        on_progress: ProgressCallback | None = None,
+        on_log: LogCallback | None = None,
     ) -> GenerateOutputs:
         """
         Generate rollouts for a set of inputs.
@@ -873,6 +911,10 @@ class Environment(ABC):
             inputs_list = inputs.to_list()
         elif isinstance(inputs, list):
             inputs_list = inputs
+
+        # notify caller of actual total count (useful when num_examples=-1)
+        if on_start is not None:
+            on_start(len(inputs_list))
 
         # resolve concurrency knobs
         gen_limit = max_concurrent_generation
@@ -898,7 +940,7 @@ class Environment(ABC):
         if independent_scoring:
             for i, input_item in enumerate(inputs_list):
                 task = asyncio.create_task(
-                    self.run_rollout(
+                    maybe_retry(self.run_rollout, max_retries=max_retries)(
                         input_item,
                         client,
                         model,
@@ -922,7 +964,7 @@ class Environment(ABC):
 
             for i, group in enumerate(group_list):
                 task = asyncio.create_task(
-                    self.run_group(
+                    maybe_retry(self.run_group, max_retries=max_retries)(
                         group,
                         client,
                         model,
@@ -935,9 +977,9 @@ class Environment(ABC):
             pbar_total = len(group_list)
             pbar_desc = f"Processing {len(group_list)} groups ({len(inputs_list)} total rollouts)"
 
-        # set up progress bar
+        # set up progress bar (only when use_tqdm=True and no external progress callback)
         pbar = None
-        if use_tqdm:
+        if use_tqdm and on_progress is None:
             from tqdm import tqdm
 
             pbar = tqdm(total=pbar_total, desc=pbar_desc, postfix=dict(reward="?"))
@@ -961,10 +1003,13 @@ class Environment(ABC):
                         reward_sum += r
                         reward_count += 1
 
+                # update progress bar or call callback
                 if pbar is not None:
                     pbar.update(1)
                     if reward_count > 0:
                         pbar.set_postfix(reward=f"{reward_sum / reward_count:.3f}")
+                elif on_progress is not None:
+                    on_progress(all_states, states)
 
                 # save intermediate results
                 if (
@@ -1002,9 +1047,11 @@ class Environment(ABC):
             start_time,
         )
 
-        # Save if requested
+        # save if requested
         if save_results:
-            save_rollout_results(results)
+            save_rollout_results(results, push_to_hf_hub, hf_hub_dataset_name)
+            if on_log is not None:
+                on_log(f"Saved final results to {results['metadata']['path_to_save']}")
 
         return results
 
@@ -1069,7 +1116,14 @@ class Environment(ABC):
         state_columns: list[str] | None = None,
         save_results: bool = False,
         save_every: int = -1,
+        push_to_hf_hub: bool = False,
+        hf_hub_dataset_name: str | None = None,
+        use_tqdm: bool = True,
         independent_scoring: bool = False,
+        max_retries: int = 0,
+        on_start: StartCallback | None = None,
+        on_progress: ProgressCallback | None = None,
+        on_log: LogCallback | None = None,
         **kwargs,
     ) -> GenerateOutputs:
         """
@@ -1088,7 +1142,14 @@ class Environment(ABC):
             state_columns=state_columns,
             save_results=save_results,
             save_every=save_every,
+            push_to_hf_hub=push_to_hf_hub,
+            hf_hub_dataset_name=hf_hub_dataset_name,
+            use_tqdm=use_tqdm,
             independent_scoring=independent_scoring,
+            max_retries=max_retries,
+            on_start=on_start,
+            on_progress=on_progress,
+            on_log=on_log,
             **kwargs,
         )
 
@@ -1106,7 +1167,10 @@ class Environment(ABC):
         state_columns: list[str] | None = None,
         save_results: bool = False,
         save_every: int = -1,
+        push_to_hf_hub: bool = False,
+        hf_hub_dataset_name: str | None = None,
         independent_scoring: bool = False,
+        max_retries: int = 0,
     ) -> GenerateOutputs:
         """
         Evaluate model on the Environment evaluation dataset synchronously.
@@ -1124,7 +1188,10 @@ class Environment(ABC):
             state_columns=state_columns,
             save_results=save_results,
             save_every=save_every,
+            push_to_hf_hub=push_to_hf_hub,
+            hf_hub_dataset_name=hf_hub_dataset_name,
             independent_scoring=independent_scoring,
+            max_retries=max_retries,
         )
 
     # setters for use by trainers
